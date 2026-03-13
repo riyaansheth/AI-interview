@@ -8,13 +8,22 @@ function InterviewSession() {
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
+  const mediaRecorderRef = useRef(null)
+  const audioChunksRef = useRef([])
 
   const [camError, setCamError] = useState(null)
   const [camReady, setCamReady] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [lastAudioBlob, setLastAudioBlob] = useState(null)
+  const [recordingTime, setRecordingTime] = useState(0)
+  const timerRef = useRef(null)
 
   useEffect(() => {
     startCamera()
-    return () => stopCamera()
+    return () => {
+      stopCamera()
+      clearInterval(timerRef.current)
+    }
   }, [])
 
   async function startCamera() {
@@ -40,9 +49,56 @@ function InterviewSession() {
     }
   }
 
+  function startRecording() {
+    if (!streamRef.current || recording) return
+
+    audioChunksRef.current = []
+    setLastAudioBlob(null)
+    setRecordingTime(0)
+
+    const audioStream = new MediaStream(streamRef.current.getAudioTracks())
+    const mediaRecorder = new MediaRecorder(audioStream, {
+      mimeType: 'audio/webm;codecs=opus'
+    })
+    mediaRecorderRef.current = mediaRecorder
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        audioChunksRef.current.push(e.data)
+      }
+    }
+
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' })
+      setLastAudioBlob(blob)
+    }
+
+    mediaRecorder.start(100)
+    setRecording(true)
+
+    timerRef.current = setInterval(() => {
+      setRecordingTime(prev => prev + 1)
+    }, 1000)
+  }
+
+  function stopRecording() {
+    if (mediaRecorderRef.current && recording) {
+      mediaRecorderRef.current.stop()
+      setRecording(false)
+      clearInterval(timerRef.current)
+    }
+  }
+
   function handleEndInterview() {
     stopCamera()
+    stopRecording()
     navigate('/')
+  }
+
+  function formatTime(secs) {
+    const m = String(Math.floor(secs / 60)).padStart(2, '0')
+    const s = String(secs % 60).padStart(2, '0')
+    return `${m}:${s}`
   }
 
   if (!role || !difficulty) {
@@ -96,7 +152,16 @@ function InterviewSession() {
               </>
             )}
             <div style={styles.videoLabel}>You</div>
-            {camReady && <div style={styles.liveIndicator}><span style={styles.liveDot} />LIVE</div>}
+            {camReady && (
+              <div style={styles.liveIndicator}>
+                <span style={styles.liveDot} />LIVE
+              </div>
+            )}
+            {recording && (
+              <div style={styles.recordingOverlay}>
+                🔴 Recording {formatTime(recordingTime)}
+              </div>
+            )}
           </div>
         </div>
 
@@ -104,8 +169,10 @@ function InterviewSession() {
 
           <div style={styles.botCard}>
             <div style={styles.botAvatar}>🤖</div>
-            <div style={styles.botName}>AI Interviewer</div>
-            <div style={styles.botStatus}>Ready</div>
+            <div>
+              <div style={styles.botName}>AI Interviewer</div>
+              <div style={styles.botStatus}>Ready</div>
+            </div>
           </div>
 
           <div style={styles.questionCard}>
@@ -127,9 +194,35 @@ function InterviewSession() {
               </div>
             </div>
 
-            <button style={styles.recordBtn} disabled={!camReady}>
-              🎙️ Hold to Answer
+            <button
+              style={{
+                ...styles.recordBtn,
+                background: recording
+                  ? 'linear-gradient(135deg, #dc2626, #b91c1c)'
+                  : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                opacity: camReady ? 1 : 0.4,
+              }}
+              onMouseDown={startRecording}
+              onMouseUp={stopRecording}
+              onTouchStart={startRecording}
+              onTouchEnd={stopRecording}
+              disabled={!camReady}
+            >
+              {recording ? `🔴 Recording... ${formatTime(recordingTime)}` : '🎙️ Hold to Answer'}
             </button>
+
+            {lastAudioBlob && !recording && (
+              <div style={styles.audioPreview}>
+                <p style={styles.audioPreviewLabel}>Last recording:</p>
+                <audio
+                  controls
+                  key={lastAudioBlob.size}
+                  src={URL.createObjectURL(lastAudioBlob)}
+                  style={styles.audioPlayer}
+                />
+              </div>
+            )}
+
           </div>
 
         </div>
@@ -163,16 +256,17 @@ const styles = {
     cursor: 'pointer', fontWeight: '600',
   },
   mainLayout: {
-    display: 'flex', flex: 1, gap: '1.5rem', padding: '1.5rem',
-    flexWrap: 'wrap',
+    display: 'flex', flex: 1, gap: '1.5rem', padding: '1.5rem', flexWrap: 'wrap',
   },
   videoSection: { flex: 2, minWidth: '300px' },
   videoWrapper: {
     position: 'relative', background: '#000', borderRadius: '1rem',
-    overflow: 'hidden', aspectRatio: '16/9',
-    border: '1px solid #334155',
+    overflow: 'hidden', aspectRatio: '16/9', border: '1px solid #334155',
   },
-  video: { width: '100%', height: '100%', objectFit: 'cover', display: 'block', transform: 'scaleX(-1)' },
+  video: {
+    width: '100%', height: '100%', objectFit: 'cover',
+    display: 'block', transform: 'scaleX(-1)',
+  },
   camError: {
     display: 'flex', flexDirection: 'column', alignItems: 'center',
     justifyContent: 'center', height: '100%', gap: '1rem',
@@ -195,10 +289,17 @@ const styles = {
     display: 'flex', alignItems: 'center', gap: '0.4rem',
   },
   liveDot: {
-    width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444',
-    display: 'inline-block', animation: 'pulse 1.5s infinite',
+    width: '8px', height: '8px', borderRadius: '50%',
+    background: '#ef4444', display: 'inline-block',
   },
-  rightPanel: { flex: 1, minWidth: '260px', display: 'flex', flexDirection: 'column', gap: '1rem' },
+  recordingOverlay: {
+    position: 'absolute', bottom: '0.75rem', right: '0.75rem',
+    background: 'rgba(220,38,38,0.8)', color: '#fff',
+    padding: '0.25rem 0.75rem', borderRadius: '0.4rem', fontSize: '0.8rem', fontWeight: '600',
+  },
+  rightPanel: {
+    flex: 1, minWidth: '260px', display: 'flex', flexDirection: 'column', gap: '1rem',
+  },
   botCard: {
     background: '#1e293b', border: '1px solid #334155', borderRadius: '1rem',
     padding: '1.25rem', display: 'flex', alignItems: 'center', gap: '1rem',
@@ -223,19 +324,25 @@ const styles = {
     background: '#1e293b', border: '1px solid #334155', borderRadius: '1rem', padding: '1.25rem',
   },
   statusRow: { display: 'flex', gap: '1.5rem', marginBottom: '1rem' },
-  statusItem: { display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: '#94a3b8' },
+  statusItem: {
+    display: 'flex', alignItems: 'center', gap: '0.5rem',
+    fontSize: '0.85rem', color: '#94a3b8',
+  },
   statusDot: { width: '8px', height: '8px', borderRadius: '50%' },
   recordBtn: {
-    width: '100%', padding: '0.85rem',
-    background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-    color: '#fff', fontSize: '0.95rem', fontWeight: '600',
-    borderRadius: '0.75rem', border: 'none', cursor: 'pointer',
-    opacity: 1,
+    width: '100%', padding: '0.85rem', color: '#fff',
+    fontSize: '0.95rem', fontWeight: '600', borderRadius: '0.75rem',
+    border: 'none', cursor: 'pointer', transition: 'background 0.2s',
   },
+  audioPreview: { marginTop: '1rem' },
+  audioPreviewLabel: {
+    fontSize: '0.8rem', color: '#64748b', marginBottom: '0.5rem',
+  },
+  audioPlayer: { width: '100%', marginTop: '0.25rem' },
   card: {
     background: '#1e293b', border: '1px solid #334155', borderRadius: '1.5rem',
-    padding: '3rem 2.5rem', maxWidth: '480px', width: '100%', textAlign: 'center',
-    margin: 'auto',
+    padding: '3rem 2.5rem', maxWidth: '480px', width: '100%',
+    textAlign: 'center', margin: 'auto',
   },
   title: { fontSize: '1.8rem', color: '#f1f5f9', marginBottom: '1rem' },
   subtitle: { color: '#94a3b8', marginBottom: '2rem' },
